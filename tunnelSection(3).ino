@@ -1,5 +1,4 @@
 #include <MeAuriga.h>
-#include <math.h>
 
 // ── Ports ─────────────────────────────────────────────────────────────────────
 #define COLOR_PORT         PORT_7
@@ -13,29 +12,15 @@ const int TURN_SOFT  = 50;
 const int TURN_HARD  = 40;
 const int LOOP_DELAY = 10;
 
-const int RED_R_MIN = 700;
-const int RED_G_MAX = 300;
-const int RED_B_MAX = 150;
-
-#define US_RIGHT_PORT PORT_8
-#define US_LEFT_PORT  PORT_9
-
-const int   TUNNEL_SPEED     = 65;
-const float WALL_DEADBAND_CM = 2.0f;
-const int   WALL_CORRECTION  = 7;
-const float WALL_GONE_CM     = 25.0f;
-const int   WALL_GONE_CONFIRM = 5;
-const float WALL_TARGET_CM = 12.0f;
-
-#define MIRRORED_TRACK false
+const int RED_R_MIN = 80;
+const int RED_G_MAX = 60;
+const int RED_B_MAX = 60;
 
 // ── Objects ───────────────────────────────────────────────────────────────────
 MeLineFollower   lineSensor(LINE_FOLLOWER_PORT);
 MeColorSensor    colorSensor(COLOR_PORT);
 MeEncoderOnBoard motorLeft(MOTOR_LEFT_SLOT);
 MeEncoderOnBoard motorRight(MOTOR_RIGHT_SLOT);
-MeUltrasonicSensor usRight(US_RIGHT_PORT);
-MeUltrasonicSensor usLeft(US_LEFT_PORT);
 
 // ── Motors ────────────────────────────────────────────────────────────────────
 static void _setMotors(int l, int r) {
@@ -44,55 +29,12 @@ static void _setMotors(int l, int r) {
 }
 static void _stop() { _setMotors(0, 0); }
 
-static void _forward(int spd) { _setMotors(spd, spd); }
-
-static void doWallHug() {
-  bool hugRight = !MIRRORED_TRACK;
-  float dist  = hugRight ? usRight.distanceCm() : usLeft.distanceCm();
-  float error = dist - WALL_TARGET_CM;  // positive = too far, negative = too close
-
-  // Exponential correction: small errors → small correction, large errors → large correction
-  // correction = sign(error) * WALL_CORRECTION * (e^(|error|/scale) - 1)
-  // scale controls how aggressively it ramps up — lower = more aggressive
-  const float scale = 3.0f;
-  float expCorr = WALL_CORRECTION * (exp(abs(error) / scale) - 1.0f);
-  int correction = (int)constrain(expCorr, 0, 80);
-
-  if (abs(error) < WALL_DEADBAND_CM) {
-    _forward(TUNNEL_SPEED);
-    return;
-  }
-
-  bool tooFar = error > 0;
-  if (hugRight) {
-    // too far from right wall → steer right (speed up left, slow right)
-    if (tooFar) _setMotors(TUNNEL_SPEED + correction, TUNNEL_SPEED - correction);
-    else        _setMotors(TUNNEL_SPEED - correction, TUNNEL_SPEED + correction);
-  } else {
-    if (tooFar) _setMotors(TUNNEL_SPEED - correction, TUNNEL_SPEED + correction);
-    else        _setMotors(TUNNEL_SPEED + correction, TUNNEL_SPEED - correction);
-  }
-}
-
-// returns true once the opposite (middle) wall disappears
-static int wallGoneCnt = 0;
-bool middleWallGone() {
-  bool hugRight = !MIRRORED_TRACK;
-  float opp = hugRight ? usLeft.distanceCm() : usRight.distanceCm();
-  if (opp > WALL_GONE_CM) wallGoneCnt++;
-  else                    wallGoneCnt = 0;
-  return wallGoneCnt >= WALL_GONE_CONFIRM;
-}
-
 // ── Color sensor ──────────────────────────────────────────────────────────────
 bool colorIsRed() {
   colorSensor.ColorDataRead();
   uint16_t r = colorSensor.ReturnRedData();
   uint16_t g = colorSensor.ReturnGreenData();
   uint16_t b = colorSensor.ReturnBlueData();
-  //Serial.print("R:"); Serial.print(r);
-  //Serial.print(" G:"); Serial.print(g);
-  //Serial.print(" B:"); Serial.println(b);
   return (r > RED_R_MIN && g < RED_G_MAX && b < RED_B_MAX);
 }
 
@@ -107,49 +49,28 @@ void followLine() {
   }
 }
 
-
-
-
 // ── Setup & loop ──────────────────────────────────────────────────────────────
 static bool stopped    = false;
-static bool inTunnel   = false;
 static int  redConfirm = 0;
 
 void setup() {
   colorSensor.SensorInit();
-  Serial.begin(9600);
   _stop();
-  delay(1000);
+  delay(2000);
 }
-
 
 void loop() {
   if (stopped) return;
 
-  if (!inTunnel) {
-    if (colorIsRed()) {
-      _setMotors(BASE_SPEED, BASE_SPEED);
-      delay(500);
-      _stop();
-      redConfirm++;
-      if (redConfirm >= 1) {
-        redConfirm = 0;
-        inTunnel   = true;
-        wallGoneCnt = 0;
-        
-      }
-    } else {
-      redConfirm = 0;
-      followLine();
+  if (colorIsRed()) {
+    _stop();  // halt immediately on first red detect
+    redConfirm++;
+    if (redConfirm >= 3) {
+      stopped = true;  // confirmed red → stay stopped
     }
   } else {
-
-    if (middleWallGone()) {
-      _stop();
-      stopped = true;  // phase 1 done — extend from here next
-    } else {
-      doWallHug();
-    }
+    redConfirm = 0;
+    followLine();
   }
 
   delay(LOOP_DELAY);
